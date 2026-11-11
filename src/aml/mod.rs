@@ -682,13 +682,11 @@ where
                         }
                     }
                     Opcode::Notify => {
-                        // TODO: may need special handling on the node to get path?
-                        extract_args!(op => [Argument::Namestring(name), Argument::Object(value)]);
-                        let value = value.as_integer()?;
-
-                        info!("Notify {:?} with value {}", name, value);
-                        // TODO: support
-                        return Err(AmlError::LibUnimplemented);
+                        // TODO: support notify handlers (ACPICA without one ignores it too)
+                        extract_args!(op => [Argument::Object(object), Argument::Object(value)]);
+                        let value = value.clone().unwrap_transparent_reference().as_integer()?;
+                        info!("Ignoring Notify of {} with value {}", object, value);
+                        context.retire_op(op);
                     }
                     Opcode::FromBCD => self.do_from_bcd(&mut context, op)?,
                     Opcode::ToBCD => self.do_to_bcd(&mut context, op)?,
@@ -834,7 +832,7 @@ where
                             Argument::PkgLength(then_length),
                             Argument::Object(predicate),
                         ]);
-                        let predicate = predicate.as_integer()?;
+                        let predicate = predicate.clone().unwrap_transparent_reference().as_integer()?;
                         let remaining_then_length = then_length - (context.current_block.pc - start_pc);
 
                         if predicate > 0 {
@@ -867,7 +865,7 @@ where
                     | opcode @ Opcode::CreateQWordField => {
                         extract_args!(op => [Argument::Object(buffer), Argument::Object(index)]);
                         let name = context.namestring()?;
-                        let index = index.as_integer()?;
+                        let index = index.clone().unwrap_transparent_reference().as_integer()?;
                         let (offset, length) = match opcode {
                             Opcode::CreateBitField => (index, 1),
                             Opcode::CreateByteField => (index * 8, 8),
@@ -885,8 +883,8 @@ where
                     Opcode::CreateField => {
                         extract_args!(op => [Argument::Object(buffer), Argument::Object(bit_index), Argument::Object(num_bits)]);
                         let name = context.namestring()?;
-                        let bit_index = bit_index.as_integer()?;
-                        let num_bits = num_bits.as_integer()?;
+                        let bit_index = bit_index.clone().unwrap_transparent_reference().as_integer()?;
+                        let num_bits = num_bits.clone().unwrap_transparent_reference().as_integer()?;
 
                         self.namespace.lock().insert(
                             name.resolve(&context.current_scope)?,
@@ -2149,7 +2147,7 @@ where
         let result = if source.is_empty() {
             Object::String(String::new())
         } else {
-            let mut buffer = source.split_inclusive(|b| *b == b'\0').next().unwrap();
+            let mut buffer = source.split(|b| *b == b'\0').next().unwrap();
             if length < usize::MAX {
                 buffer = &buffer[0..usize::min(length, buffer.len())];
             }
@@ -2393,7 +2391,7 @@ where
             }
             Object::Package(ref package) => {
                 let Some(element) = package.get(index_value as usize) else { Err(AmlError::IndexOutOfBounds)? };
-                Object::Reference { kind: ReferenceKind::RefOf, inner: element.clone() }
+                Object::Reference { kind: ReferenceKind::Index, inner: element.clone() }
             }
             _ => Err(AmlError::IndexOutOfBounds)?,
         }
@@ -2456,11 +2454,13 @@ where
     }
 
     fn do_deref_of(&self, object: WrappedObject, current_scope: &AmlName) -> Result<WrappedObject, AmlError> {
+        let object = object.unwrap_transparent_reference();
+        let through_reference = matches!(*object, Object::Reference { .. });
         let object = self.resolve_name_path(object)?;
         match &*object {
             Object::BufferField { .. } => Ok(object.read_buffer_field(self.integer_size)?.wrap()),
             Object::FieldUnit(field) => self.do_field_read(field),
-            Object::String(path) => {
+            Object::String(path) if !through_reference => {
                 let path = AmlName::from_str(path)?;
                 let (_, object) = self.namespace.lock().search(&path, current_scope)?;
                 Ok(object.clone())
@@ -2472,7 +2472,7 @@ where
 
     /// Perform a store of `object` into `target`, matching the expected behaviour of `DefStore`,
     /// which depends on the target:
-    ///    - Locals and Index references are overwritten, unless the Local contains a reference
+    ///    - Locals and Index references are overwritten, unless the Local or element contains a reference
     ///      (e.g. obtained via `RefOf`), in which case a store is performed to the referenced
     ///      object with implicit casting.
     ///    - Args are overwritten, unless they contain a reference, in which case the referenced
@@ -2568,7 +2568,7 @@ where
                     inner.clone().unwrap_transparent_reference()
                 }
             }
-            ReferenceKind::Index => todo!(),
+            ReferenceKind::Index => inner.clone(),
             ReferenceKind::RefOf | ReferenceKind::Unresolved => return Err(AmlError::StoreToInvalidReferenceType),
         };
 

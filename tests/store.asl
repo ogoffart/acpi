@@ -66,6 +66,20 @@ DefinitionBlock ("", "DSDT", 2, "RSACPI", "TESTTABL", 0xF0F0F0F0)
         CHEK (Local1, 2)
     }
 
+    // A store to a package element replaces it, but through a Local it's cast
+    Method (T8) {
+        Name(PKG, Package () { 0, 1 })
+        PKG[0] = "ABC"
+        CHEK(ObjectType(PKG[0]), 2)
+    }
+
+    Method (T9) {
+        Name(PKG, Package () { 0 })
+        Local1 = Index(PKG, 0)
+        Local1 = "ABC"
+        CHEK(ObjectType(PKG[0]), 1)
+    }
+
     // uACPI equivalent: references-0.asl
     Method (U1) {
         Local0 = "MyString"
@@ -163,6 +177,20 @@ DefinitionBlock ("", "DSDT", 2, "RSACPI", "TESTTABL", 0xF0F0F0F0)
         }
     }
 
+    Method (T10) {
+        Name(BUF, Buffer (4) { 0xff, 0xff, 0xff, 0xff })
+        BUF = Buffer () { 1, 2 }
+        CHEK(BUF, Buffer () { 1, 2, 0, 0 })
+        BUF = Buffer () { 1, 2, 3, 4, 5, 6 }
+        CHEK(BUF, Buffer () { 1, 2, 3, 4 })
+    }
+
+    Method (T11) {
+        Name(BUF, Buffer (0) {})
+        BUF = Buffer () { 1, 2 }
+        CHEK(BUF, Buffer () { 1, 2 })
+    }
+
     Method (MAIN, 0, NotSerialized) {
         T1()
         T2()
@@ -171,6 +199,8 @@ DefinitionBlock ("", "DSDT", 2, "RSACPI", "TESTTABL", 0xF0F0F0F0)
         T5()
         T6()
         T7(0)
+        T8()
+        T9()
 
         // uACPI equivalents given in the comments:
         U1() // references-0
@@ -180,6 +210,8 @@ DefinitionBlock ("", "DSDT", 2, "RSACPI", "TESTTABL", 0xF0F0F0F0)
         U4() // references-8
         U5() // references-9
         U6() // references-10
+        T10()
+        T11()
 
         Return (FCNT)
     }

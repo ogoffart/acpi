@@ -189,7 +189,11 @@ impl WrappedObject {
         // for the strange Windows NT behaviour handled in the `match arg_to_local` statement below.
         let mut arg_to_local: Option<WrappedObject> = None;
 
-        let mut target = self;
+        // A package element is replaced, unless it holds a reference
+        let mut target = match *self {
+            Object::Reference { kind: ReferenceKind::Index, ref inner } => inner.clone(),
+            _ => self.clone(),
+        };
 
         loop {
             let Object::Reference { kind, ref inner } = *target else {
@@ -338,7 +342,7 @@ impl Object {
                     });
                 }
             };
-            if *length <= integer_size as usize {
+            if *length <= integer_size as usize * 8 {
                 let mut dst = [0u8; 8];
                 copy_bits(buffer, *offset, &mut dst, 0, *length);
                 Ok(Object::Integer(u64::from_le_bytes(dst)))
@@ -377,7 +381,7 @@ impl Object {
 
     /// Replace this object's contents with that of a `new` object, applying implicit casting rules
     /// as needed. This follows the NT interpreter's creative interpretation of implicit casts, which is
-    /// effectively a byte-wise transmutation.
+    /// effectively a byte-wise transmutation. A buffer keeps its length, unless it's empty.
     pub fn replace_with_implicit_casting(&mut self, new: Object) -> Result<(), AmlError> {
         let new_bytes = match new {
             Object::Integer(value) => &value.to_le_bytes(),
@@ -397,7 +401,12 @@ impl Object {
                 *value = String::from_utf8_lossy(new_bytes).split('\0').next().unwrap().to_string();
             }
             Object::Buffer(value) => {
-                *value = new_bytes.to_vec();
+                if value.is_empty() {
+                    value.resize(new_bytes.len(), 0);
+                }
+                let n = usize::min(new_bytes.len(), value.len());
+                value[..n].copy_from_slice(&new_bytes[..n]);
+                value[n..].fill(0);
             }
             _ => return Err(AmlError::InvalidImplicitCast { from: self.typ(), to: new.typ() }),
         }
